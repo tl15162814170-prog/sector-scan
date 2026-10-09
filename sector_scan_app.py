@@ -31,7 +31,7 @@ st.sidebar.info("建议收盘后使用（15:00后数据更准确）")
 if st.button("🚀 开始扫盘", type="primary", use_container_width=True):
     with st.spinner("正在获取今日板块资金流向数据..."):
         try:
-            df = ak.stock_sector_fund_flow_rank_em(indicator="今日")
+            df = ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业资金流")
             
             # 统一列名
             df = df.rename(columns={
