@@ -14,7 +14,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# 自定义样式，让界面更接近截图风格
 st.markdown("""
 <style>
     .main-header {
@@ -28,13 +27,6 @@ st.markdown("""
         color: #888;
         margin-bottom: 20px;
     }
-    .card {
-        background: linear-gradient(135deg, #fff5f5 0%, #fff 100%);
-        border-radius: 16px;
-        padding: 20px;
-        margin-bottom: 15px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-    }
     .stButton>button {
         border-radius: 12px;
         height: 48px;
@@ -44,16 +36,17 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="main-header">选股魔方</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">专业投研 · 聚焦价值 · 策略优良</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">专业投研 · 聚焦价值 · 策略优良 | 数据源：同花顺</div>', unsafe_allow_html=True)
 
 # ==================== 工具函数 ====================
-def safe_get_sector(max_retry=3):
+def safe_get_industry_ths(max_retry=3):
+    """获取同花顺行业资金流，带重试"""
     for i in range(max_retry):
         try:
-            df = ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业资金流")
+            df = ak.stock_fund_flow_industry(symbol="即时")
             if df is not None and not df.empty:
                 return df
-        except:
+        except Exception as e:
             time.sleep(1.5)
     return None
 
@@ -69,61 +62,105 @@ def get_stock_list():
 # ==================== 页面分区 ====================
 tab1, tab2, tab3, tab4 = st.tabs(["📊 板块资金扫盘", "🌙 尾盘量化选股", "☀️ 早盘量化选股", "⭐ 特色指标"])
 
-# ========== 1. 板块资金扫盘 ==========
+# ========== 1. 板块资金扫盘（同花顺） ==========
 with tab1:
-    st.subheader("板块资金流向扫盘")
+    st.subheader("板块资金流向扫盘（同花顺数据）")
+    
     col1, col2, col3 = st.columns(3)
     with col1:
-        black_inflow = st.number_input("黑马净流入≥(亿)", 5.0, 50.0, 8.0, 1.0, key="b1")
+        black_inflow = st.number_input("黑马净流入≥(亿)", 1.0, 30.0, 3.0, 0.5, key="b1")
     with col2:
-        black_pct = st.number_input("黑马涨幅≤(%)", 0.5, 3.0, 1.0, 0.1, key="b2")
+        black_pct = st.number_input("黑马涨幅≤(%)", 0.5, 3.0, 1.2, 0.1, key="b2")
     with col3:
-        start_inflow = st.number_input("冒头净流入≥(亿)", 3.0, 30.0, 5.0, 1.0, key="b3")
+        start_inflow = st.number_input("冒头净流入≥(亿)", 1.0, 20.0, 2.0, 0.5, key="b3")
 
     if st.button("🚀 开始扫盘", key="scan1", use_container_width=True):
-        with st.spinner("正在扫描全市场板块资金..."):
-            df = safe_get_sector()
-            if df is None:
-                st.error("获取数据失败，东方财富接口繁忙，请稍后再试或改用本地运行")
+        with st.spinner("正在获取同花顺行业资金流向..."):
+            df = safe_get_industry_ths()
+            
+            if df is None or df.empty:
+                st.error("获取数据失败，请稍后再试")
             else:
-                # 列名兼容处理
-                name_col = [c for c in df.columns if "名称" in c][0]
-                pct_col = [c for c in df.columns if "涨跌幅" in c][0]
-                net_col = [c for c in df.columns if "主力净流入-净额" in c or ("主力净流入" in c and "净额" in c)][0]
-
-                df["板块"] = df[name_col]
-                df["涨跌幅"] = pd.to_numeric(df[pct_col], errors="coerce")
-                df["净流入亿"] = pd.to_numeric(df[net_col], errors="coerce") / 1e8
-                df = df.dropna(subset=["涨跌幅", "净流入亿"])
-
-                # 黑马
-                black = df[(df["净流入亿"] >= black_inflow) & (df["涨跌幅"] <= black_pct) & (df["涨跌幅"] > -1.5)]
-                black = black.sort_values("净流入亿", ascending=False)
-
-                # 冒头
-                start = df[(df["净流入亿"] >= start_inflow) & (df["涨跌幅"] >= 1.5)]
-                start = start.sort_values("涨跌幅", ascending=False)
-
-                # 失血
-                bleed = df[df["净流入亿"] <= -15].sort_values("净流入亿").head(10)
-
-                st.success(f"扫描完成 {datetime.now().strftime('%H:%M:%S')}")
-
-                st.markdown("### 🐴 黑马 | 钱进来了，价没抬")
-                if not black.empty:
-                    st.dataframe(black[["板块", "净流入亿", "涨跌幅"]].round(2), use_container_width=True, hide_index=True)
-                else:
-                    st.info("今日无明显黑马")
-
-                st.markdown("### 🚀 冒头 | 钱到位，已经动了")
-                if not start.empty:
-                    st.dataframe(start[["板块", "净流入亿", "涨跌幅"]].round(2), use_container_width=True, hide_index=True)
-                else:
-                    st.info("今日无明显启动板块")
-
-                st.markdown("### ❌ 失血 | 大钱在跑")
-                if not bleed.empty:
-                    st.dataframe(bleed[["板块", "净流入亿", "涨跌幅"]].round(2), use_container_width=True, hide_index=True)
+                # 同花顺返回的列名处理
+                # 常见列：行业、行业-涨跌幅、流入资金、流出资金、净额 等
+                try:
+                    # 统一列名
+                    rename_map = {}
+                    for col in df.columns:
+                        if "行业" in str(col) and "涨跌" not in str(col) and "指数" not in str(col):
+                            rename_map[col] = "板块"
+                        elif "涨跌幅" in str(col) or "行业-涨跌幅" in str(col):
+                            rename_map[col] = "涨跌幅"
+                        elif "净额" in str(col):
+                            rename_map[col] = "净流入"
+                    
+                    df = df.rename(columns=rename_map)
+                    
+                    # 确保有必要的列
+                    if "板块" not in df.columns:
+                        # 尝试直接取第一列或第二列
+                        df = df.rename(columns={df.columns[1]: "板块"})
+                    
+                    df["涨跌幅"] = pd.to_numeric(df.get("涨跌幅", 0), errors="coerce")
+                    df["净流入"] = pd.to_numeric(df.get("净流入", 0), errors="coerce")
+                    
+                    # 同花顺净额单位通常是「亿」
+                    df["净流入亿"] = df["净流入"]
+                    
+                    df = df.dropna(subset=["涨跌幅", "净流入亿"])
+                    
+                    # 黑马：钱进来了，价没抬
+                    black = df[
+                        (df["净流入亿"] >= black_inflow) & 
+                        (df["涨跌幅"] <= black_pct) & 
+                        (df["涨跌幅"] > -2)
+                    ].sort_values("净流入亿", ascending=False)
+                    
+                    # 冒头：钱到位，已经动了
+                    start = df[
+                        (df["净流入亿"] >= start_inflow) & 
+                        (df["涨跌幅"] >= 1.5)
+                    ].sort_values("涨跌幅", ascending=False)
+                    
+                    # 失血
+                    bleed = df[df["净流入亿"] <= -3].sort_values("净流入亿").head(12)
+                    
+                    st.success(f"✅ 扫描完成 · {datetime.now().strftime('%H:%M:%S')} · 数据源：同花顺")
+                    
+                    st.markdown("### 🐴 黑马 | 钱进来了，价没抬（偷偷建仓）")
+                    if not black.empty:
+                        show = black[["板块", "净流入亿", "涨跌幅"]].copy()
+                        show.columns = ["板块", "净流入(亿)", "涨跌幅%"]
+                        show = show.round(2)
+                        st.dataframe(show, use_container_width=True, hide_index=True)
+                        top = show.iloc[0]
+                        st.info(f"**{top['板块']}** 净流入 **{top['净流入(亿)']} 亿**，涨幅仅 **{top['涨跌幅%']}%**")
+                    else:
+                        st.write("今日无明显黑马板块")
+                    
+                    st.markdown("---")
+                    st.markdown("### 🚀 冒头 | 钱到位，已经动了（明牌启动）")
+                    if not start.empty:
+                        show = start[["板块", "净流入亿", "涨跌幅"]].copy()
+                        show.columns = ["板块", "净流入(亿)", "涨跌幅%"]
+                        show = show.round(2)
+                        st.dataframe(show, use_container_width=True, hide_index=True)
+                    else:
+                        st.write("今日无明显启动板块")
+                    
+                    st.markdown("---")
+                    st.markdown("### ❌ 失血 | 大钱在跑")
+                    if not bleed.empty:
+                        show = bleed[["板块", "净流入亿", "涨跌幅"]].copy()
+                        show.columns = ["板块", "净流入(亿)", "涨跌幅%"]
+                        show = show.round(2)
+                        st.dataframe(show, use_container_width=True, hide_index=True)
+                    else:
+                        st.write("今日无明显失血板块")
+                        
+                except Exception as e:
+                    st.error(f"数据处理出错：{e}")
+                    st.write("原始数据列名：", list(df.columns))
 
 # ========== 2. 尾盘量化选股 ==========
 with tab2:
@@ -138,7 +175,7 @@ with tab2:
     with c3:
         vol_ratio = st.slider("放量倍数", 1.5, 3.0, 1.8, 0.1, key="t3")
 
-    max_num = st.slider("扫描数量（越大越慢）", 100, 800, 300, 50, key="t4")
+    max_num = st.slider("扫描数量（越大越慢）", 100, 600, 250, 50, key="t4")
 
     if st.button("🌙 开始尾盘选股", key="scan2", use_container_width=True):
         with st.spinner(f"正在扫描约{max_num}只股票，请耐心等待..."):
@@ -151,10 +188,10 @@ with tab2:
                 progress = st.progress(0)
                 status = st.empty()
 
-                for i, row in stock_df.iterrows():
+                for idx, (_, row) in enumerate(stock_df.iterrows()):
                     code = row["代码"]
                     name = row["名称"]
-                    status.text(f"扫描中 {i+1}/{len(stock_df)}  {code} {name}")
+                    status.text(f"扫描中 {idx+1}/{len(stock_df)}  {code} {name}")
                     try:
                         end = datetime.now().strftime("%Y%m%d")
                         start = (datetime.now() - timedelta(days=90)).strftime("%Y%m%d")
@@ -188,8 +225,8 @@ with tab2:
                         })
                     except:
                         pass
-                    progress.progress((i+1)/len(stock_df))
-                    time.sleep(0.08)
+                    progress.progress((idx+1)/len(stock_df))
+                    time.sleep(0.06)
 
                 progress.empty()
                 status.empty()
@@ -216,7 +253,6 @@ with tab3:
             else:
                 df["涨跌幅"] = pd.to_numeric(df["涨跌幅"], errors="coerce")
                 df["成交额"] = pd.to_numeric(df["成交额"], errors="coerce")
-                # 简单强势过滤
                 strong = df[
                     (df["涨跌幅"] >= 3) &
                     (df["涨跌幅"] < 9.9) &
@@ -232,8 +268,7 @@ with tab3:
 # ========== 4. 特色指标 ==========
 with tab4:
     st.subheader("特色指标（简化版）")
-    st.info("以下为简化演示逻辑，实际可继续扩展")
-
+    st.info("以下为示意逻辑，后续可继续扩展")
     st.markdown("""
     **十全十美（示意）**  
     - 均线多头排列  
@@ -247,7 +282,5 @@ with tab4:
     - 回踩不破关键支撑  
     """)
 
-    st.warning("完整特色指标需要更多历史数据和回测支持，后续可继续迭代。")
-
 st.markdown("---")
-st.caption("仅供学习研究，不构成投资建议 | 数据来源：东方财富 via akshare")
+st.caption("仅供学习研究，不构成投资建议 | 数据来源：同花顺 + 东方财富 via akshare")
