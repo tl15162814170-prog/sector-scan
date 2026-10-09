@@ -2,6 +2,7 @@ import streamlit as st
 import akshare as ak
 import pandas as pd
 from datetime import datetime
+import time
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -27,39 +28,64 @@ bleed_outflow = st.sidebar.number_input("失血：主力净流出 ≤（亿）",
 st.sidebar.markdown("---")
 st.sidebar.info("建议收盘后使用（15:00后数据更准确）")
 
-# ==================== 主程序 ====================
-if st.button("🚀 开始扫盘", type="primary", use_container_width=True):
-    with st.spinner("正在获取今日板块资金流向数据..."):
+# ==================== 带重试的数据获取 ====================
+def get_sector_data(max_retry=3):
+    for i in range(max_retry):
         try:
             df = ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业资金流")
+            if df is not None and not df.empty:
+                return df
+        except Exception as e:
+            if i < max_retry - 1:
+                time.sleep(2)  # 等待2秒再重试
+                continue
+            else:
+                raise e
+    return None
+
+# ==================== 主程序 ====================
+if st.button("🚀 开始扫盘", type="primary", use_container_width=True):
+    with st.spinner("正在获取今日板块资金流向数据（自动重试中）..."):
+        try:
+            df = get_sector_data()
             
-            # 统一列名
-            df = df.rename(columns={
-                "名称": "板块",
-                "今日主力净流入-净额": "主力净流入",
-                "今日涨跌幅": "板块涨跌",
-                "今日主力净流入-净占比": "净占比"
-            })
+            if df is None or df.empty:
+                st.error("获取数据失败，请稍后再试")
+                st.stop()
+            
+            # 统一列名处理（兼容不同版本返回的列名）
+            col_map = {}
+            for col in df.columns:
+                if "名称" in col:
+                    col_map[col] = "板块"
+                elif "涨跌幅" in col:
+                    col_map[col] = "板块涨跌"
+                elif "主力净流入-净额" in col or "主力净流入" in col and "净额" in col:
+                    col_map[col] = "主力净流入"
+            
+            df = df.rename(columns=col_map)
+            
+            # 确保必要列存在
+            if "主力净流入" not in df.columns or "板块涨跌" not in df.columns:
+                st.error("数据格式异常，请稍后重试")
+                st.stop()
             
             df["主力净流入_亿"] = pd.to_numeric(df["主力净流入"], errors="coerce") / 1e8
             df["板块涨跌"] = pd.to_numeric(df["板块涨跌"], errors="coerce")
             df = df.dropna(subset=["主力净流入_亿", "板块涨跌"])
             
             # ========== 三类分类 ==========
-            # 1. 黑马：钱进来了，价没抬（偷偷建仓）
             black = df[
                 (df["主力净流入_亿"] >= black_inflow) & 
                 (df["板块涨跌"] <= black_pct_max) &
                 (df["板块涨跌"] > -2)
             ].sort_values("主力净流入_亿", ascending=False)
             
-            # 2. 冒头：钱到位，已经动了（明牌启动）
             start = df[
                 (df["主力净流入_亿"] >= start_inflow) & 
                 (df["板块涨跌"] >= start_pct_min)
             ].sort_values("板块涨跌", ascending=False)
             
-            # 3. 失血：大钱在跑
             bleed = df[
                 (df["主力净流入_亿"] <= bleed_outflow)
             ].sort_values("主力净流入_亿").head(12)
@@ -118,7 +144,7 @@ if st.button("🚀 开始扫盘", type="primary", use_container_width=True):
             else:
                 st.info("今日资金流向较为分散，建议继续观察。")
             
-            # ========== 下载全部数据 ==========
+            # ========== 下载 ==========
             st.markdown("---")
             all_data = df[["板块", "主力净流入_亿", "板块涨跌"]].copy()
             all_data.columns = ["板块", "主力净流入(亿)", "板块涨跌%"]
@@ -137,21 +163,16 @@ if st.button("🚀 开始扫盘", type="primary", use_container_width=True):
                 
         except Exception as e:
             st.error(f"获取数据失败：{str(e)}")
-            st.info("可能原因：网络问题或akshare接口暂时限流，请稍后重试。")
+            st.info("东方财富接口偶尔会限流，请等待1-2分钟后再次点击「开始扫盘」重试。")
 
-# 使用说明
 with st.expander("📖 使用说明"):
     st.markdown("""
     **三类信号解释**：
-    
-    - **黑马（偷偷建仓）**：主力净流入很大，但板块涨幅很小 → 钱进来了价没抬，低位埋单形态
+    - **黑马（偷偷建仓）**：主力净流入很大，但板块涨幅很小 → 钱进来了价没抬
     - **冒头（明牌启动）**：主力净流入较大 + 板块明显上涨 → 钱到位，已经动了
-    - **失血**：主力大幅净流出 + 板块下跌 → 大钱在跑，位置还高
+    - **失血**：主力大幅净流出 + 板块下跌 → 大钱在跑
     
-    **建议**：
-    1. 每天收盘后（15:00后）运行一次
-    2. 重点跟踪「黑马」板块后续是否持续吸筹
-    3. 「失血」板块短期谨慎追高
+    **建议**：每天收盘后运行一次，重点跟踪「黑马」板块后续是否持续吸筹。
     """)
 
 st.markdown("---")
