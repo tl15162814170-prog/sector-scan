@@ -1,179 +1,253 @@
 import streamlit as st
 import akshare as ak
 import pandas as pd
-from datetime import datetime
+import numpy as np
+from datetime import datetime, timedelta
 import time
 import warnings
 warnings.filterwarnings("ignore")
 
 st.set_page_config(
-    page_title="阿盘·收盘扫盘同款",
-    page_icon="📊",
+    page_title="选股魔方",
+    page_icon="📈",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
-st.title("📊 收盘扫盘 · 板块资金流向")
-st.caption("同款逻辑：偷偷建仓 / 明牌启动 / 失血 | 手机浏览器可用 | 数据来源：东方财富")
+# 自定义样式，让界面更接近截图风格
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 28px;
+        font-weight: bold;
+        color: #1f1f1f;
+        margin-bottom: 5px;
+    }
+    .sub-header {
+        font-size: 14px;
+        color: #888;
+        margin-bottom: 20px;
+    }
+    .card {
+        background: linear-gradient(135deg, #fff5f5 0%, #fff 100%);
+        border-radius: 16px;
+        padding: 20px;
+        margin-bottom: 15px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    }
+    .stButton>button {
+        border-radius: 12px;
+        height: 48px;
+        font-weight: 600;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-# ==================== 侧边栏参数 ====================
-st.sidebar.header("🔧 参数设置")
+st.markdown('<div class="main-header">选股魔方</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">专业投研 · 聚焦价值 · 策略优良</div>', unsafe_allow_html=True)
 
-black_inflow = st.sidebar.number_input("黑马：主力净流入 ≥（亿）", 3.0, 100.0, 8.0, 1.0)
-black_pct_max = st.sidebar.number_input("黑马：板块涨幅 ≤（%）", 0.1, 5.0, 1.0, 0.1)
-start_inflow = st.sidebar.number_input("冒头：主力净流入 ≥（亿）", 2.0, 50.0, 5.0, 1.0)
-start_pct_min = st.sidebar.number_input("冒头：板块涨幅 ≥（%）", 0.5, 10.0, 1.5, 0.1)
-bleed_outflow = st.sidebar.number_input("失血：主力净流出 ≤（亿）", -200.0, -5.0, -20.0, 5.0)
-
-st.sidebar.markdown("---")
-st.sidebar.info("建议收盘后使用（15:00后数据更准确）")
-
-# ==================== 带重试的数据获取 ====================
-def get_sector_data(max_retry=3):
+# ==================== 工具函数 ====================
+def safe_get_sector(max_retry=3):
     for i in range(max_retry):
         try:
             df = ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业资金流")
             if df is not None and not df.empty:
                 return df
-        except Exception as e:
-            if i < max_retry - 1:
-                time.sleep(2)  # 等待2秒再重试
-                continue
-            else:
-                raise e
+        except:
+            time.sleep(1.5)
     return None
 
-# ==================== 主程序 ====================
-if st.button("🚀 开始扫盘", type="primary", use_container_width=True):
-    with st.spinner("正在获取今日板块资金流向数据（自动重试中）..."):
-        try:
-            df = get_sector_data()
-            
-            if df is None or df.empty:
-                st.error("获取数据失败，请稍后再试")
-                st.stop()
-            
-            # 统一列名处理（兼容不同版本返回的列名）
-            col_map = {}
-            for col in df.columns:
-                if "名称" in col:
-                    col_map[col] = "板块"
-                elif "涨跌幅" in col:
-                    col_map[col] = "板块涨跌"
-                elif "主力净流入-净额" in col or "主力净流入" in col and "净额" in col:
-                    col_map[col] = "主力净流入"
-            
-            df = df.rename(columns=col_map)
-            
-            # 确保必要列存在
-            if "主力净流入" not in df.columns or "板块涨跌" not in df.columns:
-                st.error("数据格式异常，请稍后重试")
-                st.stop()
-            
-            df["主力净流入_亿"] = pd.to_numeric(df["主力净流入"], errors="coerce") / 1e8
-            df["板块涨跌"] = pd.to_numeric(df["板块涨跌"], errors="coerce")
-            df = df.dropna(subset=["主力净流入_亿", "板块涨跌"])
-            
-            # ========== 三类分类 ==========
-            black = df[
-                (df["主力净流入_亿"] >= black_inflow) & 
-                (df["板块涨跌"] <= black_pct_max) &
-                (df["板块涨跌"] > -2)
-            ].sort_values("主力净流入_亿", ascending=False)
-            
-            start = df[
-                (df["主力净流入_亿"] >= start_inflow) & 
-                (df["板块涨跌"] >= start_pct_min)
-            ].sort_values("板块涨跌", ascending=False)
-            
-            bleed = df[
-                (df["主力净流入_亿"] <= bleed_outflow)
-            ].sort_values("主力净流入_亿").head(12)
-            
-            st.success(f"✅ 扫描完成 · {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-            
-            # ========== 黑马 ==========
-            st.subheader("🐴 黑马 | 钱进来了，价没抬（偷偷建仓）")
-            if not black.empty:
-                show_black = black[["板块", "主力净流入_亿", "板块涨跌"]].copy()
-                show_black.columns = ["板块", "主力净流入(亿)", "板块涨跌%"]
-                show_black["主力净流入(亿)"] = show_black["主力净流入(亿)"].round(2)
-                show_black["板块涨跌%"] = show_black["板块涨跌%"].round(2)
-                st.dataframe(show_black, use_container_width=True, hide_index=True)
-                
-                top = show_black.iloc[0]
-                st.info(f"**{top['板块']}** 净流入 **{top['主力净流入(亿)']} 亿**，板块只涨了 **{top['板块涨跌%']}%** —— 钱进来了价没动，是低位埋单的形态。")
-            else:
-                st.write("今日无明显黑马板块")
-            
-            st.markdown("---")
-            
-            # ========== 冒头 ==========
-            st.subheader("🚀 冒头 | 钱到位，已经动了（明牌启动）")
-            if not start.empty:
-                show_start = start[["板块", "主力净流入_亿", "板块涨跌"]].copy()
-                show_start.columns = ["板块", "主力净流入(亿)", "板块涨跌%"]
-                show_start["主力净流入(亿)"] = show_start["主力净流入(亿)"].round(2)
-                show_start["板块涨跌%"] = show_start["板块涨跌%"].round(2)
-                st.dataframe(show_start, use_container_width=True, hide_index=True)
-            else:
-                st.write("今日无明显启动板块")
-            
-            st.markdown("---")
-            
-            # ========== 失血 ==========
-            st.subheader("❌ 失血 | 大钱在跑，位置还在高位")
-            if not bleed.empty:
-                show_bleed = bleed[["板块", "主力净流入_亿", "板块涨跌"]].copy()
-                show_bleed.columns = ["板块", "主力净流入(亿)", "板块涨跌%"]
-                show_bleed["主力净流入(亿)"] = show_bleed["主力净流入(亿)"].round(2)
-                show_bleed["板块涨跌%"] = show_bleed["板块涨跌%"].round(2)
-                st.dataframe(show_bleed, use_container_width=True, hide_index=True)
-            else:
-                st.write("今日无明显失血板块")
-            
-            # ========== 一句话总结 ==========
-            st.markdown("---")
-            st.subheader("📌 一句话总结")
-            if not black.empty and not bleed.empty:
-                st.success(f"**钱从高位科技往低位周期搬**：重点观察【{black.iloc[0]['板块']}】的持续吸筹，警惕【{bleed.iloc[0]['板块']}】的继续失血。")
-            elif not black.empty:
-                st.success(f"今日重点观察【**{black.iloc[0]['板块']}**】——主力在低位偷偷建仓。")
-            elif not start.empty:
-                st.success(f"今日最强启动板块是【**{start.iloc[0]['板块']}**】。")
-            else:
-                st.info("今日资金流向较为分散，建议继续观察。")
-            
-            # ========== 下载 ==========
-            st.markdown("---")
-            all_data = df[["板块", "主力净流入_亿", "板块涨跌"]].copy()
-            all_data.columns = ["板块", "主力净流入(亿)", "板块涨跌%"]
-            all_data = all_data.sort_values("主力净流入(亿)", ascending=False)
-            all_data["主力净流入(亿)"] = all_data["主力净流入(亿)"].round(2)
-            all_data["板块涨跌%"] = all_data["板块涨跌%"].round(2)
-            
-            csv = all_data.to_csv(index=False).encode("utf-8-sig")
-            st.download_button(
-                label="📥 下载今日全部板块资金流向CSV",
-                data=csv,
-                file_name=f"板块资金流向_{datetime.now().strftime('%Y%m%d')}.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
-                
-        except Exception as e:
-            st.error(f"获取数据失败：{str(e)}")
-            st.info("东方财富接口偶尔会限流，请等待1-2分钟后再次点击「开始扫盘」重试。")
+def get_stock_list():
+    try:
+        df = ak.stock_zh_a_spot_em()
+        df = df[df["代码"].str.match(r"^(00|30|60|68)")]
+        df = df[~df["名称"].str.contains("ST|st|\*ST|退", na=False)]
+        return df
+    except:
+        return None
 
-with st.expander("📖 使用说明"):
+# ==================== 页面分区 ====================
+tab1, tab2, tab3, tab4 = st.tabs(["📊 板块资金扫盘", "🌙 尾盘量化选股", "☀️ 早盘量化选股", "⭐ 特色指标"])
+
+# ========== 1. 板块资金扫盘 ==========
+with tab1:
+    st.subheader("板块资金流向扫盘")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        black_inflow = st.number_input("黑马净流入≥(亿)", 5.0, 50.0, 8.0, 1.0, key="b1")
+    with col2:
+        black_pct = st.number_input("黑马涨幅≤(%)", 0.5, 3.0, 1.0, 0.1, key="b2")
+    with col3:
+        start_inflow = st.number_input("冒头净流入≥(亿)", 3.0, 30.0, 5.0, 1.0, key="b3")
+
+    if st.button("🚀 开始扫盘", key="scan1", use_container_width=True):
+        with st.spinner("正在扫描全市场板块资金..."):
+            df = safe_get_sector()
+            if df is None:
+                st.error("获取数据失败，东方财富接口繁忙，请稍后再试或改用本地运行")
+            else:
+                # 列名兼容处理
+                name_col = [c for c in df.columns if "名称" in c][0]
+                pct_col = [c for c in df.columns if "涨跌幅" in c][0]
+                net_col = [c for c in df.columns if "主力净流入-净额" in c or ("主力净流入" in c and "净额" in c)][0]
+
+                df["板块"] = df[name_col]
+                df["涨跌幅"] = pd.to_numeric(df[pct_col], errors="coerce")
+                df["净流入亿"] = pd.to_numeric(df[net_col], errors="coerce") / 1e8
+                df = df.dropna(subset=["涨跌幅", "净流入亿"])
+
+                # 黑马
+                black = df[(df["净流入亿"] >= black_inflow) & (df["涨跌幅"] <= black_pct) & (df["涨跌幅"] > -1.5)]
+                black = black.sort_values("净流入亿", ascending=False)
+
+                # 冒头
+                start = df[(df["净流入亿"] >= start_inflow) & (df["涨跌幅"] >= 1.5)]
+                start = start.sort_values("涨跌幅", ascending=False)
+
+                # 失血
+                bleed = df[df["净流入亿"] <= -15].sort_values("净流入亿").head(10)
+
+                st.success(f"扫描完成 {datetime.now().strftime('%H:%M:%S')}")
+
+                st.markdown("### 🐴 黑马 | 钱进来了，价没抬")
+                if not black.empty:
+                    st.dataframe(black[["板块", "净流入亿", "涨跌幅"]].round(2), use_container_width=True, hide_index=True)
+                else:
+                    st.info("今日无明显黑马")
+
+                st.markdown("### 🚀 冒头 | 钱到位，已经动了")
+                if not start.empty:
+                    st.dataframe(start[["板块", "净流入亿", "涨跌幅"]].round(2), use_container_width=True, hide_index=True)
+                else:
+                    st.info("今日无明显启动板块")
+
+                st.markdown("### ❌ 失血 | 大钱在跑")
+                if not bleed.empty:
+                    st.dataframe(bleed[["板块", "净流入亿", "涨跌幅"]].round(2), use_container_width=True, hide_index=True)
+
+# ========== 2. 尾盘量化选股 ==========
+with tab2:
+    st.subheader("尾盘量化选股 · 横盘放量启动")
+    st.caption("逻辑：长期横盘 + 突然放量 + 收阳")
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        sideways_days = st.slider("横盘天数", 15, 45, 25, key="t1")
+    with c2:
+        amp_th = st.slider("最大振幅%", 10, 25, 15, key="t2") / 100
+    with c3:
+        vol_ratio = st.slider("放量倍数", 1.5, 3.0, 1.8, 0.1, key="t3")
+
+    max_num = st.slider("扫描数量（越大越慢）", 100, 800, 300, 50, key="t4")
+
+    if st.button("🌙 开始尾盘选股", key="scan2", use_container_width=True):
+        with st.spinner(f"正在扫描约{max_num}只股票，请耐心等待..."):
+            stock_df = get_stock_list()
+            if stock_df is None:
+                st.error("获取股票列表失败")
+            else:
+                stock_df = stock_df.head(max_num)
+                results = []
+                progress = st.progress(0)
+                status = st.empty()
+
+                for i, row in stock_df.iterrows():
+                    code = row["代码"]
+                    name = row["名称"]
+                    status.text(f"扫描中 {i+1}/{len(stock_df)}  {code} {name}")
+                    try:
+                        end = datetime.now().strftime("%Y%m%d")
+                        start = (datetime.now() - timedelta(days=90)).strftime("%Y%m%d")
+                        hist = ak.stock_zh_a_hist(symbol=code, period="daily", start_date=start, end_date=end, adjust="qfq")
+                        if hist is None or len(hist) < sideways_days + 25:
+                            continue
+                        hist = hist.rename(columns={"日期":"date","开盘":"open","收盘":"close","最高":"high","最低":"low","成交量":"volume","成交额":"amount","涨跌幅":"pct"})
+                        hist = hist.sort_values("date").reset_index(drop=True)
+
+                        recent = hist.iloc[-(sideways_days+1):-1]
+                        today = hist.iloc[-1]
+
+                        amp = (recent["high"].max() - recent["low"].min()) / recent["low"].min()
+                        if amp > amp_th:
+                            continue
+                        vol_ma = hist["volume"].iloc[-(21):-1].mean()
+                        if vol_ma <= 0 or today["volume"] / vol_ma < vol_ratio:
+                            continue
+                        if today["close"] < today["open"] and today["pct"] <= 0:
+                            continue
+                        if today["amount"] < 5e7:
+                            continue
+
+                        results.append({
+                            "代码": code,
+                            "名称": name,
+                            "现价": round(today["close"], 2),
+                            "涨幅%": round(today["pct"], 2),
+                            "放量倍数": round(today["volume"]/vol_ma, 2),
+                            "振幅%": round(amp*100, 2)
+                        })
+                    except:
+                        pass
+                    progress.progress((i+1)/len(stock_df))
+                    time.sleep(0.08)
+
+                progress.empty()
+                status.empty()
+
+                if results:
+                    res_df = pd.DataFrame(results).sort_values("放量倍数", ascending=False)
+                    st.success(f"找到 {len(res_df)} 只符合条件的股票")
+                    st.dataframe(res_df, use_container_width=True, hide_index=True)
+                    csv = res_df.to_csv(index=False).encode("utf-8-sig")
+                    st.download_button("下载结果CSV", csv, f"尾盘选股_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv")
+                else:
+                    st.warning("未找到符合条件的股票，可适当放宽参数")
+
+# ========== 3. 早盘量化选股 ==========
+with tab3:
+    st.subheader("早盘量化选股 · 高开放量")
+    st.caption("逻辑：高开 + 放量 + 强势")
+
+    if st.button("☀️ 开始早盘选股", key="scan3", use_container_width=True):
+        with st.spinner("正在获取实时行情..."):
+            df = get_stock_list()
+            if df is None:
+                st.error("获取数据失败")
+            else:
+                df["涨跌幅"] = pd.to_numeric(df["涨跌幅"], errors="coerce")
+                df["成交额"] = pd.to_numeric(df["成交额"], errors="coerce")
+                # 简单强势过滤
+                strong = df[
+                    (df["涨跌幅"] >= 3) &
+                    (df["涨跌幅"] < 9.9) &
+                    (df["成交额"] >= 1e8)
+                ].sort_values("涨跌幅", ascending=False).head(30)
+
+                st.success(f"找到 {len(strong)} 只早盘强势股")
+                show = strong[["代码", "名称", "最新价", "涨跌幅", "成交额"]].copy()
+                show["成交额"] = (show["成交额"]/1e8).round(2)
+                show.columns = ["代码", "名称", "最新价", "涨跌幅%", "成交额(亿)"]
+                st.dataframe(show, use_container_width=True, hide_index=True)
+
+# ========== 4. 特色指标 ==========
+with tab4:
+    st.subheader("特色指标（简化版）")
+    st.info("以下为简化演示逻辑，实际可继续扩展")
+
     st.markdown("""
-    **三类信号解释**：
-    - **黑马（偷偷建仓）**：主力净流入很大，但板块涨幅很小 → 钱进来了价没抬
-    - **冒头（明牌启动）**：主力净流入较大 + 板块明显上涨 → 钱到位，已经动了
-    - **失血**：主力大幅净流出 + 板块下跌 → 大钱在跑
-    
-    **建议**：每天收盘后运行一次，重点跟踪「黑马」板块后续是否持续吸筹。
+    **十全十美（示意）**  
+    - 均线多头排列  
+    - 成交量温和放大  
+    - 股价站上关键均线  
+    - 所属板块有资金流入  
+
+    **趋势王（示意）**  
+    - 股价创阶段新高  
+    - 量价齐升  
+    - 回踩不破关键支撑  
     """)
 
+    st.warning("完整特色指标需要更多历史数据和回测支持，后续可继续迭代。")
+
 st.markdown("---")
-st.caption("仅供学习研究，不构成投资建议。数据来源：东方财富 via akshare")
+st.caption("仅供学习研究，不构成投资建议 | 数据来源：东方财富 via akshare")
